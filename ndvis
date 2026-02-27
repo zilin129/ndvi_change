@@ -1,0 +1,90 @@
+import os
+import arcpy
+from arcpy.sa import *
+
+arcpy.CheckOutExtension("Spatial")
+arcpy.env.overwriteOutput = True
+
+# -------------------------
+# INPUTS
+# -------------------------
+ndvi_dir   = r"F:\NDVI\annual"
+diff_dir   = r"F:\NDVI\diff"
+mean_ndvi  = Raster(r"F:\NDVI\ndvi_mean.tif")
+std_ndvi   = Raster(r"F:\NDVI\ndvi_std.tif")
+
+start_year = 1999
+end_year   = 2021
+k = 3.0
+
+ndvi_tpl = "NDVI_{year}.tif"
+diff_tpl = "DIFF_{year}.tif"
+
+out_gain_year = r"F:\work\gain_year_outlier.tif"
+out_loss_year = r"F:\work\loss_year_outlier.tif"
+
+# -------------------------
+# Outlier threshold
+# -------------------------
+thr_low  = mean_ndvi - (k * std_ndvi)
+thr_high = mean_ndvi + (k * std_ndvi)
+
+best_gain_score = None
+best_gain_year  = None
+
+best_loss_score = None
+best_loss_year  = None
+
+for y in range(start_year + 1, end_year + 1):
+
+    ndvi_path = os.path.join(ndvi_dir, ndvi_tpl.format(year=y))
+    diff_path = os.path.join(diff_dir, diff_tpl.format(year=y))
+
+    if not (arcpy.Exists(ndvi_path) and arcpy.Exists(diff_path)):
+        continue
+
+    ndvi_y = Raster(ndvi_path)
+    diff_y = Raster(diff_path)
+
+    is_outlier = (ndvi_y < thr_low) | (ndvi_y > thr_high)
+    valid = is_outlier & (~IsNull(ndvi_y)) & (~IsNull(diff_y))
+
+    # ------------------
+    # GAIN (largest positive diff)
+    # ------------------
+    gain_score = SetNull(~valid | (diff_y <= 0), diff_y)
+
+    if best_gain_score is None:
+        best_gain_score = gain_score
+        best_gain_year  = Con(~IsNull(gain_score), y, 0)
+    else:
+        better_gain = (~IsNull(gain_score)) & (
+            IsNull(best_gain_score) | (gain_score > best_gain_score)
+        )
+        best_gain_score = Con(better_gain, gain_score, best_gain_score)
+        best_gain_year  = Con(better_gain, y, best_gain_year)
+
+    # ------------------
+    # LOSS (most negative diff)
+    # ------------------
+    loss_score = SetNull(~valid | (diff_y >= 0), diff_y)
+
+    if best_loss_score is None:
+        best_loss_score = loss_score
+        best_loss_year  = Con(~IsNull(loss_score), y, 0)
+    else:
+        better_loss = (~IsNull(loss_score)) & (
+            IsNull(best_loss_score) | (loss_score < best_loss_score)
+        )
+        best_loss_score = Con(better_loss, loss_score, best_loss_score)
+        best_loss_year  = Con(better_loss, y, best_loss_year)
+
+# convert 0 to NoData
+best_gain_year = SetNull(best_gain_year == 0, best_gain_year)
+best_loss_year = SetNull(best_loss_year == 0, best_loss_year)
+
+best_gain_year.save(out_gain_year)
+best_loss_year.save(out_loss_year)
+
+print("Saved gain year:", out_gain_year)
+print("Saved loss year:", out_loss_year)
