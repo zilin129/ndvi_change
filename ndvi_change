@@ -1,0 +1,84 @@
+import arcpy
+from arcpy.sa import *
+
+arcpy.CheckOutExtension("Spatial")
+arcpy.env.overwriteOutput = True
+
+# -----------------------
+# INPUTS (改路径)
+# -----------------------
+ndvi_stack = Raster(r"F:\NDVI\ndvi_stack.tif")
+diff_stack = Raster(r"F:\NDVI\ndvi_diff.tif")     # 单个文件，多band
+mean_ndvi  = Raster(r"F:\NDVI\ndvi_mean.tif")
+std_ndvi   = Raster(r"F:\NDVI\ndvi_std.tif")
+
+start_year_ndvi = 1999
+start_year_diff = 2000     # diff band1 对应 year=2000 (2000-1999)
+k = 3.0
+
+# diff阈值：按你的NDVI尺度调整
+# NDVI在[-1,1]常用 0.08~0.15；如果是0-10000，阈值乘10000
+drop_thresh = -0.10   # 下降阈值（更负才算显著下降）
+gain_thresh =  0.10   # 上升阈值
+
+out_first_drop = r"F:\work\first_change_year_drop.tif"   # 第一个“显著下降扰动年”
+out_first_gain = r"F:\work\first_change_year_gain.tif"   # 第一个“显著上升增绿年”
+out_first_any  = r"F:\work\first_change_year_any.tif"    # 第一个“任意方向显著变化年”
+
+# -----------------------
+# PREP
+# -----------------------
+thr_low  = mean_ndvi - (k * std_ndvi)
+thr_high = mean_ndvi + (k * std_ndvi)
+
+n_ndvi = ndvi_stack.bandCount
+n_diff = diff_stack.bandCount
+
+ndvi_bands = [ndvi_stack.getRasterBand(i) for i in range(1, n_ndvi + 1)]
+diff_bands = [diff_stack.getRasterBand(i) for i in range(1, n_diff + 1)]
+
+# 输出初始化为 0（表示尚未找到）
+first_drop = Raster(0)
+first_gain = Raster(0)
+first_any  = Raster(0)
+
+# -----------------------
+# LOOP: 从早到晚，遇到第一个满足条件的年份就写入（只写一次）
+# -----------------------
+for j in range(n_diff):
+    y = start_year_diff + j
+    diff = diff_bands[j]
+
+    idx_ndvi = y - start_year_ndvi
+    if idx_ndvi < 0 or idx_ndvi >= n_ndvi:
+        raise RuntimeError(f"Year mapping error: y={y}")
+
+    cur_ndvi = ndvi_bands[idx_ndvi]
+
+    low_outlier  = cur_ndvi < thr_low
+    high_outlier = cur_ndvi > thr_high
+
+    # 1) 第一个显著下降扰动年：低异常 且 diff < drop_thresh
+    cond_drop = low_outlier & (diff < drop_thresh)
+    first_drop = Con((first_drop == 0) & cond_drop, y, first_drop)
+
+    # 2) 第一个显著上升增绿年：高异常 且 diff > gain_thresh
+    cond_gain = high_outlier & (diff > gain_thresh)
+    first_gain = Con((first_gain == 0) & cond_gain, y, first_gain)
+
+    # 3) 第一个任意方向显著变化年： (低异常且显著下降) 或 (高异常且显著上升)
+    cond_any = cond_drop | cond_gain
+    first_any = Con((first_any == 0) & cond_any, y, first_any)
+
+# 0 -> NoData
+first_drop = SetNull(first_drop == 0, first_drop)
+first_gain = SetNull(first_gain == 0, first_gain)
+first_any  = SetNull(first_any  == 0, first_any)
+
+first_drop.save(out_first_drop)
+first_gain.save(out_first_gain)
+first_any.save(out_first_any)
+
+print("Saved:", out_first_drop)
+print("Saved:", out_first_gain)
+print("Saved:", out_first_any)
