@@ -1,0 +1,54 @@
+import os
+import arcpy
+from arcpy.sa import *
+
+arcpy.CheckOutExtension("Spatial")
+arcpy.env.overwriteOutput = True
+
+# -------------------------
+# INPUTS
+# -------------------------
+ndvi_dir   = r"F:\NDVI\annual"
+mean_ndvi  = Raster(r"F:\NDVI\ndvi_mean.tif")
+std_ndvi   = Raster(r"F:\NDVI\ndvi_std.tif")
+
+start_year = 1999
+end_year   = 2021
+k = 3.0
+
+ndvi_tpl = "NDVI_{year}.tif"
+out_recent_outlier_year = r"F:\work\recent_outlier_year.tif"
+
+# -------------------------
+# Outlier thresholds
+# -------------------------
+thr_low  = mean_ndvi - (k * std_ndvi)
+thr_high = mean_ndvi + (k * std_ndvi)
+
+# This will hold the first (most recent) outlier year we find
+recent_year = None
+
+for y in range(end_year, start_year - 1, -1):  # go backward (most recent first)
+    ndvi_path = os.path.join(ndvi_dir, ndvi_tpl.format(year=y))
+    if not arcpy.Exists(ndvi_path):
+        continue
+
+    ndvi_y = Raster(ndvi_path)
+
+    # outlier mask (and ndvi not null)
+    is_outlier = ((ndvi_y < thr_low) | (ndvi_y > thr_high)) & (~IsNull(ndvi_y))
+
+    year_ras = Con(is_outlier, y)  # outlier -> year, else NoData
+
+    if recent_year is None:
+        recent_year = year_ras
+    else:
+        # Keep existing year if already set; otherwise fill from this year
+        recent_year = Con(IsNull(recent_year), year_ras, recent_year)
+
+# Optional: if nothing ever set, recent_year stays None
+if recent_year is None:
+    raise RuntimeError("No NDVI rasters found in the requested year range.")
+
+recent_year.save(out_recent_outlier_year)
+print("Saved most recent outlier year:", out_recent_outlier_year)
