@@ -1,0 +1,129 @@
+import arcpy
+from arcpy.sa import *
+
+arcpy.env.overwriteOutput = True
+arcpy.CheckOutExtension("Spatial")
+arcpy.env.overwriteOutput = True
+
+workspace = r"D:\NDVI\outliers"
+arcpy.env.workspace = workspace
+
+years = list(range(1999, 2022))
+
+onset_low_final = None
+recovery_low_final = None
+onset_high_final = None
+recovery_high_final = None
+
+for i in range(1, len(years)):
+
+    curr_year = years[i]
+    curr  = Raster(f"outlier_{curr_year}.tif")
+    prev1 = Raster(f"outlier_{years[i-1]}.tif")
+
+    # ===============================
+    # 2021 尾部特殊处理
+    # ===============================
+    if curr_year == 2021:
+        prev2 = Raster(f"outlier_{years[i-2]}.tif") if i >= 2 else prev1  # 如果只有 prev1 就用 prev1
+        next1 = None  # 没有 next
+        # 偏低异常
+        onset_low = Con(
+            (prev2 != 1) & (prev1 != 1) & (curr == 1),
+            curr_year
+        )
+        recovery_low = Con(
+            (prev2 == 1) & (prev1 == 1) & (curr != 1),
+            curr_year
+        )
+        # 偏高异常
+        onset_high = Con(
+            (prev2 != 2) & (prev1 != 2) & (curr == 2),
+            curr_year
+        )
+        recovery_high = Con(
+            (prev2 == 2) & (prev1 == 2) & (curr != 2),
+            curr_year
+        )
+
+    # ===============================
+    # 2000 特殊规则
+    # ===============================
+    elif curr_year == 2000:
+        next1 = Raster(f"outlier_{years[i+1]}.tif")
+        # 偏低异常
+        onset_low = Con(
+            (prev1 != 1) & (curr == 1) & (next1 == 1),
+            curr_year
+        )
+        recovery_low = Con(
+            (prev1 == 1) & (curr != 1) & (next1 != 1),
+            curr_year
+        )
+        # 偏高异常
+        onset_high = Con(
+            (prev1 != 2) & (curr == 2) & (next1 == 2),
+            curr_year
+        )
+        recovery_high = Con(
+            (prev1 == 2) & (curr != 2) & (next1 != 2),
+            curr_year
+        )
+
+    # ===============================
+    # 2001-2020 严格模式
+    # ===============================
+    else:
+        prev2 = Raster(f"outlier_{years[i-2]}.tif")
+        next1 = Raster(f"outlier_{years[i+1]}.tif")
+        # 偏低异常
+        onset_low = Con(
+            (prev2 != 1) & (prev1 != 1) & (curr == 1) & (next1 == 1),
+            curr_year
+        )
+        recovery_low = Con(
+            (prev2 == 1) & (prev1 == 1) & (curr != 1) & (next1 != 1),
+            curr_year
+        )
+        # 偏高异常
+        onset_high = Con(
+            (prev2 != 2) & (prev1 != 2) & (curr == 2) & (next1 == 2),
+            curr_year
+        )
+        recovery_high = Con(
+            (prev2 == 2) & (prev1 == 2) & (curr != 2) & (next1 != 2),
+            curr_year
+        )
+
+    # ===============================
+    # 累积结果
+    # ===============================
+    if onset_low_final is None:
+        onset_low_final = onset_low
+    else:
+        onset_low_final = Con(IsNull(onset_low_final), onset_low, onset_low_final)
+
+    if recovery_low_final is None:
+        recovery_low_final = recovery_low
+    else:
+        recovery_low_final = Con(IsNull(recovery_low_final), recovery_low, recovery_low_final)
+
+    if onset_high_final is None:
+        onset_high_final = onset_high
+    else:
+        onset_high_final = Con(IsNull(onset_high_final), onset_high, onset_high_final)
+
+    if recovery_high_final is None:
+        recovery_high_final = recovery_high
+    else:
+        recovery_high_final = Con(IsNull(recovery_high_final), recovery_high, recovery_high_final)
+
+# ===============================
+# 保存结果
+# ===============================
+onset_low_final.save("change_onset_low_mixed2021.tif")
+recovery_low_final.save("change_recovery_low_mixed2021.tif")
+onset_high_final.save("change_onset_high_mixed2021.tif")
+recovery_high_final.save("change_recovery_high_mixed2021.tif")
+
+print("Change year rasters (mixed prev1/prev2 + 2021 tail rule) created successfully.")
